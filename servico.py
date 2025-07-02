@@ -1,192 +1,138 @@
-from typing import Optional, Any
+from sqlalchemy import Column, Integer, String, Float, func
+from sqlalchemy.orm import Session, synonym
 from tabulate import tabulate
+from typing import Optional, Any
 
-class Servico:
-    # Representa um serviço prestado pela empresa.
-    _servicos_por_nome: dict[str, 'Servico'] = {}
-    _servicos_por_id: dict[int, 'Servico'] = {}
-    _proximo_id_disponivel: int = 1
+from database import Base
 
-    def __init__(self, id_servico: Optional[int], nome: str, valor_venda: float, custo: float) -> None:
-        if id_servico is None:
-            self._id = Servico._proximo_id_disponivel
-        else:
-            if not isinstance(id_servico, int) or id_servico <= 0:
-                raise ValueError("O ID do serviço deve ser um número inteiro positivo.")
-            self._id = id_servico
+class Servico(Base):
+    __tablename__ = 'servicos'
 
+    id = Column(Integer, primary_key=True, index=True)
+    _nome = Column("nome", String(255), unique=True, index=True, nullable=False)
+    _valor_venda = Column("valor_venda", Float, nullable=False)
+    _custo = Column("custo", Float, nullable=False)
+
+    def __init__(self, nome: str, valor_venda: float, custo: float, **kwargs):
         self.nome = nome
         self.valor_venda = valor_venda
         self.custo = custo
 
-        if Servico.buscar_servico_id(self.id) is not None:
-            raise ValueError(f"Já existe um serviço com o ID {self.id}.")
-
-        for nome_existente_key in Servico._servicos_por_nome.keys():
-            if self.nome.lower() == nome_existente_key.lower():
-                raise ValueError(f"Serviço com o nome '{Servico._servicos_por_nome[nome_existente_key].nome}' já existe.")
-        
-        Servico._servicos_por_nome[self.nome] = self
-        Servico._servicos_por_id[self.id] = self
-
-        if id_servico is None:
-            Servico._proximo_id_disponivel += 1
-        elif self.id >= Servico._proximo_id_disponivel:
-            Servico._proximo_id_disponivel = self.id + 1
-
     def __str__(self) -> str:
-        return (f"Serviço ID: {self._id}, Nome: {self._nome}, Valor de Venda: R${self._valor_venda:.2f}, "
-                f"Custo: R${self._custo:.2f}")
+        return (f"Serviço ID: {self.id}, Nome: {self.nome}, Valor de Venda: R${self.valor_venda:.2f}, "
+                f"Custo: R${self.custo:.2f}")
 
     def __repr__(self) -> str:
-        return (f"Servico(id_servico={self._id!r}, nome={self._nome!r}, valor_venda={self._valor_venda!r}, "
-                f"custo={self._custo!r})")
+        return (f"Servico(id={self.id!r}, nome={self.nome!r}, "
+                f"valor_venda={self.valor_venda!r}, custo={self.custo!r})")
 
-    @property
-    def id(self) -> int:
-        return self._id
+    nome = synonym('_nome', descriptor=property(
+        lambda self: self._nome,
+        lambda self, nome_str: setattr(self, '_nome', self._validar_nome(nome_str))
+    ))
 
-    @property
-    def nome(self) -> str:
-        return self._nome
+    valor_venda = synonym('_valor_venda', descriptor=property(
+        lambda self: self._valor_venda,
+        lambda self, valor: setattr(self, '_valor_venda', self._validar_valor_venda(valor))
+    ))
 
-    @nome.setter
-    def nome(self, nome_str: str) -> None:
+    custo = synonym('_custo', descriptor=property(
+        lambda self: self._custo,
+        lambda self, valor: setattr(self, '_custo', self._validar_custo(valor))
+    ))
+
+    def _validar_nome(self, nome_str: str) -> str:
         nome_limpo = nome_str.strip()
         if not nome_limpo:
             raise ValueError("O nome do serviço não pode ser vazio.")
-        self._nome = nome_limpo
+        return nome_limpo
 
-    @property
-    def valor_venda(self) -> float:
-        return self._valor_venda
-
-    @valor_venda.setter
-    def valor_venda(self, valor: float | int | str) -> None:
+    def _validar_valor_venda(self, valor: float | int | str) -> float:
         if isinstance(valor, str):
             valor = valor.replace(",", ".")
         try:
-            valor_num: float = float(valor)
+            valor_num = float(valor)
         except ValueError:
             raise TypeError("O valor de venda deve ser um número válido.")
-        
         if valor_num <= 0:
             raise ValueError("O valor de venda deve ser maior que zero.")
-        
-        self._valor_venda = valor_num
+        return valor_num
 
-    @property
-    def custo(self) -> float:
-        return self._custo
-
-    @custo.setter
-    def custo(self, valor: float | int | str) -> None:
+    def _validar_custo(self, valor: float | int | str) -> float:
         if isinstance(valor, str):
             valor = valor.replace(",", ".")
         try:
-            valor_num: float = float(valor)
+            valor_num = float(valor)
         except ValueError:
             raise TypeError("O custo deve ser um número válido.")
-        
         if valor_num <= 0:
             raise ValueError("O custo deve ser maior que zero.")
+        return valor_num
+
+def buscar_servico(db: Session, nome_servico: str) -> Optional[Servico]:
+    nome_busca_lower = nome_servico.lower().strip()
+    return db.query(Servico).filter(func.lower(Servico.nome) == nome_busca_lower).first()
+
+def buscar_servico_id(db: Session, id_servico: int) -> Optional[Servico]:
+    return db.query(Servico).filter(Servico.id == id_servico).first()
+
+def listar_servicos(db: Session) -> list[Servico]:
+    return db.query(Servico).order_by(Servico.id).all()
+
+def criar_servico(db: Session, nome: str, valor_venda: float, custo: float) -> Servico:
+    servico_existente = buscar_servico(db, nome)
+    if servico_existente:
+        raise ValueError(f"Serviço com o nome '{servico_existente.nome}' já existe.")
+
+    novo_servico = Servico(nome=nome, valor_venda=valor_venda, custo=custo)
+    db.add(novo_servico)
+    db.commit()
+    db.refresh(novo_servico)
+    return novo_servico
+
+def atualizar_dados_servico(db: Session, id_servico: int, **kwargs: Any) -> Servico:
+    servico_existente = buscar_servico_id(db, id_servico)
+    if not servico_existente:
+        raise ValueError(f"Serviço com ID {id_servico} não encontrado para atualização.")
+    
+    if 'nome' in kwargs:
+        novo_nome = str(kwargs['nome']).strip()
+        conflito = buscar_servico(db, novo_nome)
+        if conflito and conflito.id != id_servico: #type: ignore
+            raise ValueError(f"Não foi possível atualizar. Já existe outro serviço com o nome '{novo_nome}'.")
+
+    for chave, valor in kwargs.items():
+        if hasattr(servico_existente, chave):
+            setattr(servico_existente, chave, valor)
+
+    db.commit()
+    db.refresh(servico_existente)
+    return servico_existente
+
+def deletar_servico(db: Session, id_servico: int) -> None:
+    servico_a_deletar = buscar_servico_id(db, id_servico)
+    if not servico_a_deletar:
+        raise ValueError(f"Serviço com ID {id_servico} não encontrado para exclusão.")
+    
+    db.delete(servico_a_deletar)
+    db.commit()
+
+def _formatar_servicos_para_tabela(db: Session, servicos: list[Servico]) -> str:
+    if not servicos:
+        return "Nenhum serviço para exibir."
+
+    cabecalhos = ["ID", "Nome", "Valor de Venda", "Custo"]
+    dados_tabela = []
+
+    for srv in servicos:
+        valor_venda_str = f"R${srv.valor_venda:.2f}"
+        custo_str = f"R${srv.custo:.2f}"
         
-        self._custo = valor_num
-
-    @staticmethod
-    def _inicializar_proximo_id() -> None:
-        if Servico._servicos_por_id:
-            Servico._proximo_id_disponivel = max(Servico._servicos_por_id.keys()) + 1
-        else:
-            Servico._proximo_id_disponivel = 1
-
-    @staticmethod
-    def buscar_servico(nome_servico: str) -> Optional['Servico']:
-        nome_busca_lower: str = nome_servico.lower().strip()
-        for servico_obj in Servico._servicos_por_nome.values():
-            if servico_obj.nome.lower() == nome_busca_lower:
-                return servico_obj
-        return None
-
-    @staticmethod
-    def buscar_servico_id(id_servico: int) -> Optional['Servico']:
-        return Servico._servicos_por_id.get(id_servico, None)
-
-    @staticmethod
-    def listar_servicos() -> list['Servico']:
-        return list(Servico._servicos_por_id.values())
-
-    @staticmethod
-    def atualizar_dados_servico(id_servico: int, **kwargs: Any) -> None:
-        servico_existente: Optional['Servico'] = Servico.buscar_servico_id(id_servico)
-        if not servico_existente:
-            raise ValueError(f"Serviço com ID {id_servico} não encontrado para atualização.") 
-
-        nome_antigo_para_dict: str = servico_existente.nome
-        for chave, valor in kwargs.items():
-            if chave == 'id':
-                continue
-            
-            if chave == 'nome':
-                novo_nome_limpo = str(valor).strip()
-                if not novo_nome_limpo:
-                    raise ValueError("O novo nome do serviço não pode ser vazio.")
-                
-                if novo_nome_limpo.lower() == nome_antigo_para_dict.lower():
-                    continue
-                
-                if Servico.buscar_servico(novo_nome_limpo) is not None:
-                    raise ValueError(f"Não foi possível atualizar o nome. Já existe um serviço com o nome '{novo_nome_limpo}'.")
-                
-                del Servico._servicos_por_nome[nome_antigo_para_dict]
-                try:
-                    servico_existente.nome = novo_nome_limpo
-                    Servico._servicos_por_nome[servico_existente.nome] = servico_existente
-                except Exception as e:
-                    Servico._servicos_por_nome[nome_antigo_para_dict] = servico_existente
-                    raise ValueError(f"Erro ao atualizar o nome do serviço: {e}")
-                
-                nome_antigo_para_dict = servico_existente.nome 
-            elif hasattr(servico_existente, chave):
-                try:
-                    setattr(servico_existente, chave, valor)
-                except (ValueError, TypeError) as e:
-                    raise type(e)(f"Erro ao validar '{chave}': {e}")
-
-    @staticmethod
-    def deletar_servico(id_servico: int) -> None:
-        servico_a_deletar: Optional['Servico'] = Servico.buscar_servico_id(id_servico)
-        
-        if not servico_a_deletar:
-            raise ValueError(f"Serviço com ID {id_servico} não encontrado para exclusão.")
-        
-        del Servico._servicos_por_id[id_servico]
-        if servico_a_deletar.nome in Servico._servicos_por_nome:
-            del Servico._servicos_por_nome[servico_a_deletar.nome]
-        
-
-    @staticmethod
-    def criar_servico(nome: str, valor_venda: float, custo: float) -> 'Servico':
-        novo_servico = Servico(None, nome, valor_venda, custo)
-        return novo_servico
-
-    @staticmethod
-    def _formatar_servicos_para_tabela(servicos: list['Servico']) -> str:
-        if not servicos:
-            return "Nenhum serviço para exibir."
-
-        cabecalhos = ["ID", "Nome", "Valor de Venda", "Custo"]
-        dados_tabela = []
-
-        for srv in servicos:
-            valor_venda_str = f"R${srv.valor_venda:.2f}"
-            custo_str = f"R${srv.custo:.2f}"
-            
-            dados_tabela.append([
-                srv.id,
-                srv.nome,
-                valor_venda_str,
-                custo_str
-            ])
-        
-        return tabulate(dados_tabela, headers=cabecalhos, tablefmt="grid")
+        dados_tabela.append([
+            srv.id,
+            srv.nome,
+            valor_venda_str,
+            custo_str
+        ])
+    
+    return tabulate(dados_tabela, headers=cabecalhos, tablefmt="grid")

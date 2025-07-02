@@ -1,79 +1,74 @@
-import re
-from typing import Optional, Any
-import info as mod_info
+from sqlalchemy import Column, Integer, String, func
+from sqlalchemy.orm import Session, validates
 from tabulate import tabulate
+from typing import Optional, Any, List
 
-class Fornecedor:
-    # Representa um fornecedor de produtos ou serviços.
-    _fornecedores_por_cnpj: dict[str, 'Fornecedor'] = {}
-    _fornecedores_por_id: dict[int, 'Fornecedor'] = {}
-    _proximo_id_disponivel: int = 1
+from database import Base
+import info as mod_info
 
-    def __init__(self, id_fornecedor: Optional[int], nome: str, cnpj: str, info_contato: mod_info.Informacao) -> None:
-        if id_fornecedor is None:
-            self._id = Fornecedor._proximo_id_disponivel
-        else:
-            if not isinstance(id_fornecedor, int) or id_fornecedor <= 0:
-                raise ValueError("O ID do fornecedor deve ser um número inteiro positivo.")
-            self._id = id_fornecedor
+class Fornecedor(Base):
+    __tablename__ = 'fornecedores'
 
+    id = Column(Integer, primary_key=True, index=True)
+    nome = Column(String(255), nullable=False)
+    cnpj = Column(String(18), unique=True, index=True, nullable=False)
+    
+    telefone = Column(String(50), nullable=False)
+    email = Column(String(255), nullable=False)
+    endereco_str = Column("endereco", String(255), nullable=False)
+    redes_sociais = Column(String(255), nullable=True)
+
+    def __init__(self, nome: str, cnpj: str, info_contato: mod_info.Informacao, **kwargs):
         self.nome = nome
         self.cnpj = cnpj
         self.info_contato = info_contato
-        
-        if Fornecedor.buscar_fornecedor_id(self.id) is not None:
-            raise ValueError(f"Já existe um fornecedor com o ID {self.id}.")
-
-        if self.cnpj in Fornecedor._fornecedores_por_cnpj:
-            raise ValueError(f"Fornecedor com CNPJ {self.cnpj} já existe.")  
-        
-        Fornecedor._fornecedores_por_cnpj[self.cnpj] = self
-        Fornecedor._fornecedores_por_id[self.id] = self
-
-        if id_fornecedor is None:
-            Fornecedor._proximo_id_disponivel += 1
-        elif self.id >= Fornecedor._proximo_id_disponivel:
-            Fornecedor._proximo_id_disponivel = self.id + 1
 
     def __str__(self) -> str:
-        return (f"ID: {self._id}, Nome: {self._nome}, CNPJ: {self._cnpj}\n"
+        return (f"ID: {self.id}, Nome: {self.nome}, CNPJ: {self.cnpj}\n"
                 f"  Informações de Contato: {self.info_contato}")
 
-    def __repr__(self) -> str:
-        return (f"Fornecedor(id_fornecedor={self._id!r}, nome={self._nome!r}, cnpj={self._cnpj!r}, "
-                f"info_contato={self.info_contato!r})")
-
     @property
-    def id(self) -> int:
-        return self._id
+    def info_contato(self) -> mod_info.Informacao:
+        return mod_info.Informacao(
+            telefone=self.telefone, #type: ignore
+            email=self.email, #type: ignore
+            endereco=self.endereco_str, #type: ignore
+            redes_sociais=self.redes_sociais or "" #type: ignore
+        )
 
-    @property
-    def nome(self) -> str:
-        return self._nome
+    @info_contato.setter
+    def info_contato(self, nova_info: mod_info.Informacao):
+        if not isinstance(nova_info, mod_info.Informacao):
+            raise TypeError("A informação de contato deve ser um objeto da classe Informacao.")
+            
+        self.telefone = nova_info.telefone
+        self.email = nova_info.email
+        self.redes_sociais = nova_info.redes_sociais
+        
+        endereco_dict = nova_info.endereco
+        partes = [
+            endereco_dict.get('nome_rua'),
+            endereco_dict.get('numero'),
+            endereco_dict.get('bairro'),
+            endereco_dict.get('cidade'),
+            endereco_dict.get('estado')
+        ]
+        self.endereco_str = ", ".join(filter(None, partes))
 
-    @nome.setter
-    def nome(self, nome_str: str) -> None:
+    @validates('nome')
+    def validar_nome(self, key, nome_str):
         nome_limpo = nome_str.strip()
         if not nome_limpo:
             raise ValueError("O nome do fornecedor não pode ser vazio.")
-        self._nome = nome_limpo
+        return nome_limpo
 
-    @property
-    def cnpj(self) -> str:
-        return self._cnpj
-
-    @cnpj.setter
-    def cnpj(self, cnpj_str: str) -> None:
-        cnpj_limpo: str = re.sub(r'\D', '', cnpj_str)
-        if len(cnpj_limpo) != 14:
-            raise ValueError("CNPJ inválido: Deve conter exatamente 14 dígitos.")
+    @validates('cnpj')
+    def validar_cnpj(self, key, cnpj_str):
+        cnpj_limpo = "".join(filter(str.isdigit, cnpj_str))
         if not Fornecedor._eh_cnpj_valido(cnpj_limpo):
             raise ValueError("CNPJ inválido: Dígitos verificadores não correspondem ou padrão inválido.")
-        cnpj_formatado: str = (
-            f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/"
-            f"{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
-        )
-        self._cnpj = cnpj_formatado
+        
+        return f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
 
     @staticmethod
     def _eh_cnpj_valido(numeros_cnpj: str) -> bool:
@@ -100,140 +95,69 @@ class Fornecedor:
             segundo_dv_calculado = 0
         return segundo_dv_calculado == int(numeros_cnpj[13])
 
-    @property
-    def info_contato(self) -> mod_info.Informacao:
-        return self._info_contato
+# Funções de CRUD para Fornecedor
 
-    @info_contato.setter
-    def info_contato(self, nova_info: mod_info.Informacao) -> None:
-        if not isinstance(nova_info, mod_info.Informacao):
-            raise TypeError("A informação de contato deve ser uma instância da classe Informacao.")
-        self._info_contato = nova_info
-
-    @staticmethod
-    def _inicializar_proximo_id() -> None:
-        if Fornecedor._fornecedores_por_id:
-            Fornecedor._proximo_id_disponivel = max(Fornecedor._fornecedores_por_id.keys()) + 1
-        else:
-            Fornecedor._proximo_id_disponivel = 1
-
-    @staticmethod
-    def _formatar_cnpj_para_busca(cnpj_entrada: str) -> Optional[str]:
-        cnpj_limpo: str = re.sub(r'\D', '', cnpj_entrada)
-        if len(cnpj_limpo) == 14:
-            return (
-                f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/"
-                f"{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
-            )
+def buscar_fornecedor(db: Session, cnpj: str) -> Optional[Fornecedor]:
+    try:
+        cnpj_limpo = "".join(filter(str.isdigit, cnpj))
+        if len(cnpj_limpo) != 14: return None
+        cnpj_formatado = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
+    except IndexError:
         return None
+    return db.query(Fornecedor).filter(Fornecedor.cnpj == cnpj_formatado).first() #type: ignore
 
-    @staticmethod
-    def buscar_fornecedor(cnpj: str) -> Optional['Fornecedor']:
-        cnpj_formatado: Optional[str] = Fornecedor._formatar_cnpj_para_busca(cnpj)
-        if cnpj_formatado:
-            return Fornecedor._fornecedores_por_cnpj.get(cnpj_formatado, None)
-        return None
+def buscar_fornecedor_id(db: Session, id_fornecedor: int) -> Optional[Fornecedor]:
+    return db.query(Fornecedor).filter(Fornecedor.id == id_fornecedor).first()
 
-    @staticmethod
-    def buscar_fornecedor_id(id_fornecedor: int) -> Optional['Fornecedor']:
-        return Fornecedor._fornecedores_por_id.get(id_fornecedor, None)
+def buscar_fornecedores_por_nome(db: Session, nome_parcial: str) -> List[Fornecedor]:
+    nome_lower = f"%{nome_parcial.lower().strip()}%"
+    return db.query(Fornecedor).filter(func.lower(Fornecedor.nome).like(nome_lower)).all()
 
-    @staticmethod
-    def buscar_fornecedor_por_nome_exato(nome: str) -> Optional['Fornecedor']:
-        nome_busca_lower: str = nome.lower().strip()
-        for fornecedor in Fornecedor._fornecedores_por_cnpj.values():
-            if fornecedor.nome.lower() == nome_busca_lower:
-                return fornecedor
-        return None
+def listar_fornecedores(db: Session) -> list[Fornecedor]:
+    return db.query(Fornecedor).order_by(Fornecedor.id).all()
 
-    @staticmethod
-    def buscar_fornecedores_por_nome_parcial(nome_parcial: str) -> list['Fornecedor']:
-        resultados: list['Fornecedor'] = []
-        nome_parcial_lower: str = nome_parcial.lower().strip()
-        for fornecedor in Fornecedor._fornecedores_por_cnpj.values():
-            if nome_parcial_lower in fornecedor.nome.lower():
-                resultados.append(fornecedor)
-        return resultados
+def criar_fornecedor(db: Session, nome: str, cnpj: str, info_contato: mod_info.Informacao) -> Fornecedor:
+    if buscar_fornecedor(db, cnpj):
+        raise ValueError(f"Fornecedor com CNPJ {cnpj} já existe.")
 
-    @staticmethod
-    def listar_fornecedores() -> list['Fornecedor']:
-        return list(Fornecedor._fornecedores_por_id.values())
+    novo_fornecedor = Fornecedor(nome=nome, cnpj=cnpj, info_contato=info_contato)
+    db.add(novo_fornecedor)
+    db.commit()
+    db.refresh(novo_fornecedor)
+    return novo_fornecedor
 
-    @staticmethod
-    def atualizar_dados_fornecedor(id_fornecedor: int, **kwargs: Any) -> None:
-        fornecedor_existente: Optional['Fornecedor'] = Fornecedor.buscar_fornecedor_id(id_fornecedor)
-        if not fornecedor_existente:
-            raise ValueError(f"Fornecedor com ID {id_fornecedor} não encontrado para atualização.")
+def atualizar_dados_fornecedor(db: Session, id_fornecedor: int, **kwargs: Any) -> Fornecedor:
+    fornecedor_existente = buscar_fornecedor_id(db, id_fornecedor)
+    if not fornecedor_existente:
+        raise ValueError(f"Fornecedor com ID {id_fornecedor} não encontrado.")
 
-        for chave, valor in kwargs.items():
-            if chave == 'id' or chave == 'cnpj':
-                continue
-            
-            if hasattr(fornecedor_existente, chave):
-                try:
-                    setattr(fornecedor_existente, chave, valor)
-                except (ValueError, TypeError) as e:
-                    raise type(e)(f"Erro ao validar '{chave}': {e}")
+    if 'cnpj' in kwargs:
+        conflito = buscar_fornecedor(db, kwargs['cnpj'])
+        if conflito and conflito.id != id_fornecedor: #type: ignore
+            raise ValueError(f"Não é possível atualizar. Outro fornecedor já usa o CNPJ {kwargs['cnpj']}.")
 
-    @staticmethod
-    def atualizar_cnpj_fornecedor(id_fornecedor: int, novo_cnpj: str) -> None:
-        fornecedor: Optional['Fornecedor'] = Fornecedor.buscar_fornecedor_id(id_fornecedor)
-        if not fornecedor:
-            raise ValueError(f"Fornecedor com ID {id_fornecedor} não encontrado para atualização de CNPJ.")
+    for chave, valor in kwargs.items():
+        setattr(fornecedor_existente, chave, valor)
 
-        cnpj_antigo_formatado: str = fornecedor.cnpj
-        
-        try:
-            cnpj_limpo_novo = re.sub(r'\D', '', novo_cnpj)
-            novo_cnpj_formatado = (
-                f"{cnpj_limpo_novo[:2]}.{cnpj_limpo_novo[2:5]}.{cnpj_limpo_novo[5:8]}/"
-                f"{cnpj_limpo_novo[8:12]}-{cnpj_limpo_novo[12:]}"
-            )
+    db.commit()
+    db.refresh(fornecedor_existente)
+    return fornecedor_existente
 
-            if novo_cnpj_formatado in Fornecedor._fornecedores_por_cnpj and Fornecedor._fornecedores_por_cnpj[novo_cnpj_formatado] is not fornecedor:
-                raise ValueError(f"Já existe outro fornecedor com o CNPJ {novo_cnpj_formatado}.")
+def deletar_fornecedor(db: Session, id_fornecedor: int) -> None:
+    fornecedor_a_deletar = buscar_fornecedor_id(db, id_fornecedor)
+    if not fornecedor_a_deletar:
+        raise ValueError(f"Fornecedor com ID {id_fornecedor} não encontrado.")
+    db.delete(fornecedor_a_deletar)
+    db.commit()
 
-            del Fornecedor._fornecedores_por_cnpj[cnpj_antigo_formatado]
-            fornecedor.cnpj = novo_cnpj
-            Fornecedor._fornecedores_por_cnpj[fornecedor.cnpj] = fornecedor
-        except ValueError as e:
-            Fornecedor._fornecedores_por_cnpj[cnpj_antigo_formatado] = fornecedor
-            raise ValueError(f"Erro ao atualizar CNPJ: {e}")
+def _formatar_fornecedores_para_tabela(db: Session, fornecedores: list[Fornecedor]) -> str:
+    if not fornecedores:
+        return "Nenhum fornecedor para exibir."
 
-    @staticmethod
-    def deletar_fornecedor(id_fornecedor: int) -> None:
-        fornecedor_a_deletar: Optional['Fornecedor'] = Fornecedor.buscar_fornecedor_id(id_fornecedor)
-        if not fornecedor_a_deletar:
-            raise ValueError(f"Fornecedor com ID {id_fornecedor} não encontrado para exclusão.")
-
-        del Fornecedor._fornecedores_por_id[id_fornecedor]
-        if fornecedor_a_deletar.cnpj in Fornecedor._fornecedores_por_cnpj:
-            del Fornecedor._fornecedores_por_cnpj[fornecedor_a_deletar.cnpj]
-            
-
-    @staticmethod
-    def criar_fornecedor(nome: str, cnpj: str, info_contato: mod_info.Informacao) -> 'Fornecedor':
-        novo_fornecedor = Fornecedor(None, nome, cnpj, info_contato)
-        return novo_fornecedor
-
-    @staticmethod
-    def _formatar_fornecedores_para_tabela(fornecedores: list['Fornecedor']) -> str:
-        if not fornecedores:
-            return "Nenhum fornecedor para exibir."
-
-        cabecalhos = ["ID", "Nome", "CNPJ", "Telefone", "Email"]
-        dados_tabela = []
-
-        for forn in fornecedores:
-            telefone_str = forn.info_contato.telefone
-            email_str = forn.info_contato.email
-            
-            dados_tabela.append([
-                forn.id,
-                forn.nome,
-                forn.cnpj,
-                telefone_str,
-                email_str
-            ])
-        
-        return tabulate(dados_tabela, headers=cabecalhos, tablefmt="grid")
+    cabecalhos = ["ID", "Nome", "CNPJ"]
+    dados_tabela = []
+    for forn in fornecedores:
+        dados_tabela.append([
+            forn.id, forn.nome, forn.cnpj
+        ])
+    return tabulate(dados_tabela, headers=cabecalhos, tablefmt="grid")
